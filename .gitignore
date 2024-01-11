@@ -1,0 +1,5 @@
+dataset_pf_corrected
+__pycache__
+.git_old/*
+.git_recent
+extended_model_v1
