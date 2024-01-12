@@ -3,3 +3,4 @@ __pycache__
 .git_old/*
 .git_recent
 extended_model_v1
+.ipynb_checkpoints

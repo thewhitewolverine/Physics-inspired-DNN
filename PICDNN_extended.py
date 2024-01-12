@@ -6,7 +6,7 @@ from tensorflow.keras.layers import BatchNormalization
 from tensorflow.keras.optimizers import *
 from tensorflow.python.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_percentage_error
+from sklearn.metrics import r2_score, mean_squared_error
 import numpy as np
 import tensorflow.keras as tfk
 import tensorflow as tf
