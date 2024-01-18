@@ -1,6 +1,10 @@
 from import_data import *
 from noise_models import *
-from PICDNN_extended import *
+
+# from PICDNN_extended import *
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import r2_score, mean_squared_error
+
 from Branch_flow_xy_split import *
 # from generate_xy import *
 import numpy as np
@@ -12,7 +16,7 @@ from feature_bins import std_bins_bflow
 from IPython.display import clear_output
 
 from scaler import *
-from extended_loss import *
+from extended_loss_torch import *
 from final_layer_weights import final_layer_weights
 
 VR, VI, bflow, Pinj, Qinj, CFR, CFI, CTR, CTI = import_curr_branch_data()
@@ -113,22 +117,35 @@ def split_normalise(X, y, Pinj, Qinj):
 
     return x_train_scaled, x_val_scaled, x_test_scaled, y_train_scaled, y_val_scaled, y_test_scaled
 
+def picdnn_custom_loss(self, x, xhat):
+    y = tf.linalg.matmul(x, self.last_layer_weights2)
+    yhat = tf.linalg.matmul(xhat, self.last_layer_weights2)
+    
+    #Backprop on this
+    e = (y-yhat)**2
+    
+    # b_inv1 = tf.linalg.inv(tf.matmul(self.last_layer_weights2, tf.transpose(self.last_layer_weights2)))
+    # b_inv = tf.matmul(tf.transpose(self.last_layer_weights2), b_inv1)
 
-def power_injection_loss(self, x, xhat):
-    last_layer_weights = torch.from_numpy( final_layer_weights().astype(np.float32) )
+    # e_back = tf.matmul(e, b_inv)
+    return e_back
+
+def power_injection_loss(x, xhat):
+    # xhat= model output , x=GT
+    last_layer_weights = torch.from_numpy( final_layer_weights().astype(np.float32) ).to(device)
     y = torch.matmul(x, last_layer_weights)
     yhat = torch.matmul(xhat, last_layer_weights)
     e = torch.square( (y-yhat) )
-    b_inv1 = torch.inverse(torch.matmul(last_layer_weights, tf.transpose(last_layer_weights)))
-    b_inv = tf.matmul(tf.transpose(last_layer_weights), b_inv1)
+    b_inv1 = torch.inverse(torch.matmul(last_layer_weights, torch.transpose(last_layer_weights,0,1)))
+    b_inv = torch.matmul(torch.transpose(last_layer_weights,0,1), b_inv1)
 
-    e_back = tf.matmul(e, b_inv)
+    e_back = torch.matmul(e, b_inv)
     # print(e_back.shape)
     return e_back
 
-def extended_loss(self, x, xhat):
+def extended_loss(x, xhat):
     # regular MSE
-    squared_difference = tf.square(x - xhat)
+    squared_difference = torch.square(x - xhat)
 
     # calculate power flow and get pinj loss
     PFF, PFT, PFF_actual, PFT_actual = vi_to_power_flow(x, xhat)
@@ -136,13 +153,16 @@ def extended_loss(self, x, xhat):
     bflow_actual = reorder(PFF_actual, PFT_actual)
 
     # get overall power loss
-    pinj_loss = self.power_injection_loss(bflow_actual, bflow_hat)
+    pinj_loss = power_injection_loss(bflow_actual, bflow_hat)
+
+    # print("AT 142! : ", pinj_loss.shape, pinj_loss.dtype, pinj_loss.device)    
 
     pf_loss = state_loss_power_flow(x, xhat, pinj_loss)/100
-    pf_loss = tf.cast(pf_loss, tf.float32)
+    # pf_loss = tf.cast(pf_loss, tf.float32)
+    # print("PF LOSS = ", pf_loss.shape, pf_loss.device, pf_loss.dtype)        
+    extended_loss = squared_difference + pf_loss
 
-    extended_loss = tf.add(squared_difference, pf_loss)
-    return extended_loss
+    return torch.mean(extended_loss)
 
 
 # MODEL
@@ -150,79 +170,64 @@ import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 
-# class MyDataset(Dataset):
-#     def __init__(self):
-#         pmu_loc = {
-#             11: [8, 9, 10, 26, 30, 38, 63, 64, 65, 68, 81] ,
-#             13: [8, 9, 10, 26, 30, 38, 63, 64, 65, 68, 81, 87, 111] ,
-#             32: [1, 5, 9, 12,13,17,21,23,26,28,34,37,41,45,49,53,56,62,63,68,71,75,77,80,85,86,90,94,101,105,110,114],
-#             118: np.arange(1,119)
-#         }
+LOG_TB= False
+LOG_MODEL= False
 
-#         add_bus = [x for x in pmu_loc[32] if x not in pmu_loc[11]]
-
-#         self.X_v, self.Y_p = data(add_bus, 'vi_all')    
-
-#     def __len__(self):
-#         return len(self.X_v)
-
-#     def __getitem__(self,idx):
-#         return X_v
-
+if LOG_TB:
+    from torch.utils.tensorboard import SummaryWriter
 
 
 class FullyConnectedNetwork(nn.Module):
-    def __init__(self, in_size):
+    def __init__(self, in_size,out_size):
         super(FullyConnectedNetwork,self).__init__()
         self.hidden1=nn.Sequential(
-                nn.Linear(in_features=in_size,out_features=150,bias=True),
+                nn.Linear(in_features=in_size,out_features=50,bias=True),
                 nn.ReLU())
         self.hidden2=nn.Sequential(
-                nn.Linear(in_features=150,out_features=100,bias=True),
+                nn.Linear(in_features=50,out_features=30,bias=True),
                 nn.ReLU())
         self.hidden3=nn.Sequential(
-                nn.Linear(in_features=100,out_features=300,bias=True),
+                nn.Linear(in_features=30,out_features=400,bias=True),
                 nn.ReLU())
         self.hidden4=nn.Sequential(
-                nn.Linear(in_features=300,out_features=500,bias=True),
+                nn.Linear(in_features=400,out_features=800,bias=True),
                 nn.ReLU())
 
-        self.hidden5=nn.Sequential(
-                nn.Linear(in_features=500,out_features=750,bias=True),
-                nn.ReLU())
-
-        # self.hidden3=nn.Sequential(
-        #         nn.Linear(in_features=100,out_features=50,bias=True),
+        # self.hidden5=nn.Sequential(
+        #         nn.Linear(in_features=500,out_features=750,bias=True),
         #         nn.ReLU())
 
-        self.predict= nn.Linear(in_features=750,out_features=980,bias=True)
+        self.predict= nn.Linear(in_features=800,out_features=out_size,bias=True)
 
     def forward(self,x):
         x=self.hidden1(x)
         x=self.hidden2(x)
         x=self.hidden3(x)
         x=self.hidden4(x)
-        x=self.hidden5(x)
+        # x=self.hidden5(x)
         x=self.predict(x)
         return x
 
 
 import namegenerator
 if __name__ == '__main__':
-    pmu_loc = {
-        11: [8, 9, 10, 26, 30, 38, 63, 64, 65, 68, 81] ,
-        13: [8, 9, 10, 26, 30, 38, 63, 64, 65, 68, 81, 87, 111] ,
-        32: [1, 5, 9, 12,13,17,21,23,26,28,34,37,41,45,49,53,56,62,63,68,71,75,77,80,85,86,90,94,101,105,110,114],
-        118: np.arange(1,119)
-    }
+    # pmu_loc = {
+    #     11: [8, 9, 10, 26, 30, 38, 63, 64, 65, 68, 81] ,
+    #     13: [8, 9, 10, 26, 30, 38, 63, 64, 65, 68, 81, 87, 111] ,
+    #     32: [1, 5, 9, 12,13,17,21,23,26,28,34,37,41,45,49,53,56,62,63,68,71,75,77,80,85,86,90,94,101,105,110,114],
+    #     118: np.arange(1,119)
+    # }
 
     #add_bus = [x for x in pmu_loc[32] if x not in pmu_loc[11]]
 
-    add_bus = add_bus =  [100, 49, 77, 89, 12, 59, 37, 32, 19, 104, 97, 67, 112, 41, 3, 94, 6, 28, 79, 13]
+    # add_bus = add_bus =  [100, 49, 77, 89, 12, 59, 37, 32, 19, 104, 97, 67, 112, 41, 3, 94, 6, 28, 79, 13]
 
     device =  torch.device('cuda')
+    
+    if LOG_TB:
+        writer = SummaryWriter()
 
-    X, Y = data(add_bus, 'vi_all')        
+    X, Y = data(output='vi_all')
     X_training, X_val, X_test, y_training, y_val, y_test = split_normalise(X, Y, Pinj, Qinj)
 
     x_training = torch.from_numpy( np.nan_to_num(X_training).astype(np.float32) )
@@ -233,7 +238,7 @@ if __name__ == '__main__':
     y_val = torch.from_numpy( np.nan_to_num(y_val).astype(np.float32) ).to(device)
     y_test = torch.from_numpy( np.nan_to_num(y_test).astype(np.float32) ).to(device)
 
-    batch_size= 1500
+    batch_size= 500
 
     # print(x_training.shape, y_training.shape)
     # print(x_val.shape, y_val.shape)
@@ -243,49 +248,68 @@ if __name__ == '__main__':
     train_iter=DataLoader(train_dataset,batch_size=batch_size,shuffle=True)
 
 
-    # print(len(dataset), len(train_iter))    
-    net = FullyConnectedNetwork(x_training.shape[1]).to(device)
-    optimizer = torch.optim.Adam(net.parameters(),lr = 1e-3)
+    print(f"input: {x_training.shape[1]}\noutput: {y_training.shape[1]}")
+
+    net = FullyConnectedNetwork(x_training.shape[1], y_training.shape[1] ).to(device)
+    optimizer = torch.optim.Adam(net.parameters(),lr = 1e-4)
     loss=torch.nn.MSELoss().to(device)    
 
     best_valloss= 0.0015
 
-    model_name= namegenerator.gen()
-    record_file= f"../checkpoints/{model_name}_log.txt"
-    out_file= open(record_file,'w')
-    
-    out_file.write( str(net) )
+    if LOG_MODEL:
+        model_name= namegenerator.gen()
+        record_file= f"../checkpoints/{model_name}_log.txt"
+        out_file= open(record_file,'w')    
+        out_file.write( str(net) )
 
     for epoch in range(200):
         for index, data in enumerate(train_iter):
             x,y= data
             x,y= x.to(device), y.to(device)
             out= net(x)
-            loss_ = loss(out,y)
+
+            # loss_ = loss(out,y)
+            # print("LOSS SHAPE= ", loss_.shape)
+
+            loss_= extended_loss(y,out)
+            # print("EXTENDED LOSS= ", loss_.shape, torch.mean(loss_))
 
             optimizer.zero_grad()
-            loss_.backward()
+            loss_.backward(retain_graph=True)
             optimizer.step()
         
         with torch.no_grad():            
             out= net(x_val)
-            vloss= loss(out,y_val)
-            
+            # vloss= loss(out,y_val)
+            vloss= extended_loss(y_val,out)
+
+            if LOG_TB:
+                writer.add_scalar("Loss/val", vloss, epoch)
+                writer.flush()
+
             if vloss< best_valloss:
                 best_valloss= vloss
-                torch.save(net.state_dict(), f"../checkpoints/{model_name}.pt")
-            out_file.write((f"{epoch}: \t {vloss}\n"))
+                if LOG_MODEL:
+                    torch.save(net.state_dict(), f"../checkpoints/{model_name}.pt")
+            
+            if LOG_MODEL:                    
+                out_file.write((f"{epoch}: \t {vloss}\n")) 
             print((f"{epoch}: \t {vloss}"))
     
     
     test_out= net(x_test)
     error= loss(test_out,y_test)
     
-    out_file.write(f"\n\n TEST ERROR: {error}")
+    if LOG_MODEL:
+        out_file.write(f"\n\n TEST ERROR: {error}")
+
     print(f"\n\n TEST ERROR: {error}")
 
-    out_file.close()
+    if LOG_MODEL:
+        out_file.close()
 
+    if LOG_TB:
+        writer.close()
 
 
     # loss=torch.nn.MSELoss().to(device)

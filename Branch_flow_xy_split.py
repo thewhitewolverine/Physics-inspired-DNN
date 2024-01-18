@@ -106,6 +106,8 @@ def Branch_flow_custom_xy_split(bflow, VM, VA, CFM, CFA, CTM, CTA, Pinj, Qinj, o
 	
 	if output == 'vi_all':
 		yt = [VM, VA, CFM, CFA, CTM, CTA]
+	if output == 'v_all':
+		yt = [VM, VA]		
 	elif output == 'powers':
 		yt = [bflow, Pinj]
 	elif output == 'all':
