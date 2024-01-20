@@ -56,17 +56,6 @@ C = torch.from_numpy(create_C_array(bdata,118).astype(np.float32) ).to(device)
 # VR, VI, CFR, CFI, CTR, CTI
 lengths = [118, 118, 186,186,186,186]
 
-# pfl_shape= [500,118]
-# pfl_vr_1 = torch.zeros([500, lengths[0]]).to(device)
-# pfl_vr_2 = torch.zeros([500, lengths[0]]).to(device)
-# pfl_vi_1 = torch.zeros([500, lengths[1]]).to(device)
-# pfl_vi_2 = torch.zeros([500, lengths[1]]).to(device)
-# pfl_cfr = torch.zeros([500, lengths[2]]).to(device)
-# pfl_cfi = torch.zeros([500, lengths[3]]).to(device)
-# pfl_ctr = torch.zeros([500, lengths[4]]).to(device)
-# pfl_cti = torch.zeros([500, lengths[5]]).to(device)
-
-
 def vi_to_power_flow(x, xhat):    
     sample_input = xhat
     vars = torch.split(sample_input, lengths, dim=1)
@@ -96,14 +85,6 @@ def state_loss_power_flow(x, xhat, p_inj_loss):
     ePT = ePT1 + ePT2
 
     # print([sample_input.shape[0], lengths[0]])
-    # pfl_vr_1 = torch.zeros([500, lengths[0]]).to(device)
-    # pfl_vr_2 = torch.zeros([500, lengths[0]]).to(device)
-    # pfl_vi_1 = torch.zeros([500, lengths[1]]).to(device)
-    # pfl_vi_2 = torch.zeros([500, lengths[1]]).to(device)
-    # pfl_cfr = torch.zeros([500, lengths[2]]).to(device)
-    # pfl_cfi = torch.zeros([500, lengths[3]]).to(device)
-    # pfl_ctr = torch.zeros([500, lengths[4]]).to(device)
-    # pfl_cti = torch.zeros([500, lengths[5]]).to(device)
 
     pfl_vr_1 = torch.zeros([sample_input.shape[0], lengths[0]]).to(device)
     pfl_vr_2 = torch.zeros([sample_input.shape[0], lengths[0]]).to(device)
@@ -114,15 +95,6 @@ def state_loss_power_flow(x, xhat, p_inj_loss):
     pfl_ctr = torch.zeros([sample_input.shape[0], lengths[4]]).to(device)
     pfl_cti = torch.zeros([sample_input.shape[0], lengths[5]]).to(device)
 
-
-    # pfl_vr_1[:,:]= 0
-    # pfl_vr_2[:,:]= 0
-    # pfl_vi_1[:,:]= 0
-    # pfl_vi_2[:,:]= 0
-    # pfl_cfr[:,:]= 0
-    # pfl_cfi[:,:]= 0
-    # pfl_ctr[:,:]= 0
-    # pfl_cti[:,:]= 0
 
     # vars_np = []
     # for i in vars:
@@ -154,9 +126,13 @@ def state_loss_power_flow(x, xhat, p_inj_loss):
     vr_loss = pfl_vr_1 + pfl_vr_2
     vi_loss = pfl_vi_1 + pfl_vi_2
 
-    loss_for_sample_b = torch.concat([vr_loss, vi_loss, pfl_cfr, pfl_cfi, pfl_ctr, pfl_cti], dim=1)
+    # loss_for_sample_b = torch.concat([vr_loss, vi_loss, pfl_cfr, pfl_cfi, pfl_ctr, pfl_cti], dim=1)
+    # return loss_for_sample_b
+
+    V_loss= torch.concat([vr_loss, vi_loss],dim=1)
+    P_loss= torch.concat([pfl_cfr, pfl_cfi, pfl_ctr, pfl_cti], dim=1)
+    return V_loss/100,P_loss/100
     
-    return loss_for_sample_b
 
 
 def reorder(PFF, PFT):

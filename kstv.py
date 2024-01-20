@@ -135,13 +135,16 @@ def power_injection_loss(x, xhat):
     last_layer_weights = torch.from_numpy( final_layer_weights().astype(np.float32) ).to(device)
     y = torch.matmul(x, last_layer_weights)
     yhat = torch.matmul(xhat, last_layer_weights)
-    e = torch.square( (y-yhat) )
-    b_inv1 = torch.inverse(torch.matmul(last_layer_weights, torch.transpose(last_layer_weights,0,1)))
-    b_inv = torch.matmul(torch.transpose(last_layer_weights,0,1), b_inv1)
 
-    e_back = torch.matmul(e, b_inv)
+    #backprop on this
+    e = torch.square( (y-yhat) )
+
+    # b_inv1 = torch.inverse(torch.matmul(last_layer_weights, torch.transpose(last_layer_weights,0,1)))
+    # b_inv = torch.matmul(torch.transpose(last_layer_weights,0,1), b_inv1)
+
+    # e_back = torch.matmul(e, b_inv)
     # print(e_back.shape)
-    return e_back
+    return e
 
 def extended_loss(x, xhat):
     # regular MSE
@@ -155,14 +158,18 @@ def extended_loss(x, xhat):
     # get overall power loss
     pinj_loss = power_injection_loss(bflow_actual, bflow_hat)
 
-    # print("AT 142! : ", pinj_loss.shape, pinj_loss.dtype, pinj_loss.device)    
+    print("Power injection loss: ", pinj_loss.shape, pinj_loss.dtype)
 
-    pf_loss = state_loss_power_flow(x, xhat, pinj_loss)/100
+    # pf_loss = state_loss_power_flow(x, xhat, pinj_loss)/100
+    volt_loss, power_loss= state_loss_power_flow(x, xhat, pinj_loss)
     # pf_loss = tf.cast(pf_loss, tf.float32)
-    # print("PF LOSS = ", pf_loss.shape, pf_loss.device, pf_loss.dtype)        
-    extended_loss = squared_difference + pf_loss
 
-    return torch.mean(extended_loss)
+    # print("SQDIFF: ", torch.mean(squared_difference))
+    # print("PFLOSS: ", torch.mean(pf_loss),"\n")
+
+    # extended_loss = squared_difference + pf_loss
+    return squared_difference, volt_loss, power_loss
+    # return torch.mean(extended_loss)
 
 
 # MODEL
@@ -170,8 +177,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 
-LOG_TB= False
-LOG_MODEL= False
+LOG_TB= True
+LOG_MODEL= True
 
 if LOG_TB:
     from torch.utils.tensorboard import SummaryWriter
@@ -238,7 +245,7 @@ if __name__ == '__main__':
     y_val = torch.from_numpy( np.nan_to_num(y_val).astype(np.float32) ).to(device)
     y_test = torch.from_numpy( np.nan_to_num(y_test).astype(np.float32) ).to(device)
 
-    batch_size= 500
+    batch_size= 315
 
     # print(x_training.shape, y_training.shape)
     # print(x_val.shape, y_val.shape)
@@ -271,20 +278,31 @@ if __name__ == '__main__':
             # loss_ = loss(out,y)
             # print("LOSS SHAPE= ", loss_.shape)
 
-            loss_= extended_loss(y,out)
-            # print("EXTENDED LOSS= ", loss_.shape, torch.mean(loss_))
+            sqdiff, vloss, ploss= extended_loss(y,out)
+            ext_loss= torch.mean(sqdiff + torch.concat([vloss,ploss],dim=1) )
+
+            if LOG_TB:
+                writer.add_scalar("Train/SqDiff", torch.mean(sqdiff),epoch)
+                writer.add_scalar("Train/PF_Volt", torch.mean(vloss),epoch)
+                writer.add_scalar("Train/PF_Power", torch.mean(ploss),epoch)
+
+            # print(f"SqDiff= {torch.mean(sqdiff)}\t VLoss= {torch.mean(vloss)}\t PLoss= {torch.mean(ploss)}")
 
             optimizer.zero_grad()
-            loss_.backward(retain_graph=True)
+            ext_loss.backward()
             optimizer.step()
         
         with torch.no_grad():            
             out= net(x_val)
-            # vloss= loss(out,y_val)
-            vloss= extended_loss(y_val,out)
+            
+            val_sqdiff, val_vloss, val_ploss = extended_loss(y_val,out)
+
+            vloss= torch.mean(val_sqdiff + torch.concat([val_vloss,val_ploss],dim=1) )
 
             if LOG_TB:
-                writer.add_scalar("Loss/val", vloss, epoch)
+                writer.add_scalar("Val/SqDiff", torch.mean(val_sqdiff), epoch)
+                writer.add_scalar("Val/PF_Volt", torch.mean(val_vloss),epoch)
+                writer.add_scalar("Val/PF_Power", torch.mean(val_ploss),epoch)                
                 writer.flush()
 
             if vloss< best_valloss:
@@ -294,7 +312,7 @@ if __name__ == '__main__':
             
             if LOG_MODEL:                    
                 out_file.write((f"{epoch}: \t {vloss}\n")) 
-            print((f"{epoch}: \t {vloss}"))
+            print((f"EPOCH {epoch}:\tSQDiff= {torch.mean(val_sqdiff)}\tVLoss= {torch.mean(val_vloss)}\tPLoss= {torch.mean(val_ploss)}" ))
     
     
     test_out= net(x_test)
