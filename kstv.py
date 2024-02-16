@@ -33,7 +33,8 @@ def data(addbus=[], output = "vi_all"):
 
     # X_p = VI_to_P(x_vm_n, x_va_n, x_cm_n, x_ca_n, num_bus = 11, add_bus = [])
     X_v = np.concatenate((x_vr_n, x_vi_n, x_cr_n, x_ci_n), axis=1)
-    Y_p = ytot
+    # Y_p = ytot
+    Y_p = np.concatenate((VR, VI), axis=1)
     return X_v, Y_p
 
 def mean_absolute_percentage_error(y_true, y_pred, *, sample_weight=None, multioutput="uniform_average"):
@@ -146,30 +147,62 @@ def power_injection_loss(x, xhat):
     # print(e_back.shape)
     return e
 
-def extended_loss(x, xhat):
+def extended_loss(x, xhat, cfi_vi, cfi_vr, cfr_vi, cfr_vr, cti_vi, cti_vr, ctr_vi, ctr_vr, pf_v, pt_v, pf_pinj, sbase):
     # regular MSE
     squared_difference = torch.square(x - xhat)
 
+    # get voltage real and imag from datasets
+    n_features = int(xhat.shape[1]/2)
+    vr = x[:,:n_features]
+    vi = x[:,n_features:]
+    
+    vr_hat = xhat[:,:n_features]
+    vi_hat = xhat[:,n_features:]
+
+    # calculate current from voltage and vhat
+    # print(vr_hat.shape, cfr_vr.shape)
+    cfr_hat = torch.matmul(vr_hat, cfr_vr) + torch.matmul(vi_hat, cfr_vi)
+    cfi_hat = torch.matmul(vr_hat, cfi_vr) + torch.matmul(vi_hat, cfi_vi)
+    ctr_hat = torch.matmul(vr_hat, ctr_vr) + torch.matmul(vi_hat, ctr_vi)
+    cti_hat = torch.matmul(vr_hat, cti_vr) + torch.matmul(vi_hat, cti_vi)
+
+    cfr = torch.matmul(vr, cfr_vr) + torch.matmul(vi, cfr_vi)
+    cfi = torch.matmul(vr, cfi_vr) + torch.matmul(vi, cfi_vi)
+    ctr = torch.matmul(vr, ctr_vr) + torch.matmul(vi, ctr_vi)
+    cti = torch.matmul(vr, cti_vr) + torch.matmul(vi, cti_vi)
+
+    # calculate power flow from voltage and currents
+    pf_hat = torch.matmul(vr_hat, pf_v)* cfr_hat*sbase + torch.matmul(vi_hat, pf_v)*cfi_hat*sbase
+    pt_hat = torch.matmul(vr_hat, pt_v)* ctr_hat*sbase + torch.matmul(vi_hat, pt_v)*cti_hat*sbase
+
+    pf = torch.matmul(vr, pf_v)* cfr*sbase + torch.matmul(vi, pf_v)*cfi*sbase
+    pt  = torch.matmul(vr, pt_v)* ctr*sbase + torch.matmul(vi, pt_v)*cti*sbase
+
+    # Append and calculate power injections
+    Pflow = torch.hstack([pf, pt])
+    Pflow_hat = torch.hstack([pf_hat, pt_hat])
+    pinj = torch.matmul(Pflow,pf_pinj)
+    pinj_hat = torch.matmul(Pflow_hat,pf_pinj)
+
+    pinj_loss = torch.square(pinj-pinj_hat)    
     # calculate power flow and get pinj loss
-    PFF, PFT, PFF_actual, PFT_actual = vi_to_power_flow(x, xhat)
-    bflow_hat = reorder(PFF, PFT)
-    bflow_actual = reorder(PFF_actual, PFT_actual)
+    # PFF, PFT, PFF_actual, PFT_actual = vi_to_power_flow(x, xhat)
+    # bflow_hat = reorder(PFF, PFT)
+    # bflow_actual = reorder(PFF_actual, PFT_actual)
 
-    # get overall power loss
-    pinj_loss = power_injection_loss(bflow_actual, bflow_hat)
+    # # get overall power loss
+    # pinj_loss = power_injection_loss(bflow_actual, bflow_hat)
 
-    print("Power injection loss: ", pinj_loss.shape, pinj_loss.dtype)
+    # print("Power injection loss: ", pinj_loss.shape, pinj_loss.dtype)
 
-    # pf_loss = state_loss_power_flow(x, xhat, pinj_loss)/100
-    volt_loss, power_loss= state_loss_power_flow(x, xhat, pinj_loss)
+    # # pf_loss = state_loss_power_flow(x, xhat, pinj_loss)/100
+    # volt_loss, power_loss= state_loss_power_flow(x, xhat, pinj_loss)
     # pf_loss = tf.cast(pf_loss, tf.float32)
 
     # print("SQDIFF: ", torch.mean(squared_difference))
     # print("PFLOSS: ", torch.mean(pf_loss),"\n")
 
-    # extended_loss = squared_difference + pf_loss
-    return squared_difference, volt_loss, power_loss
-    # return torch.mean(extended_loss)
+    return squared_difference, pinj_loss/sbase
 
 
 # MODEL
@@ -178,7 +211,7 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 
 LOG_TB= True
-LOG_MODEL= True
+LOG_MODEL= False
 
 if LOG_TB:
     from torch.utils.tensorboard import SummaryWriter
@@ -234,7 +267,26 @@ if __name__ == '__main__':
     if LOG_TB:
         writer = SummaryWriter()
 
+    # Import training data
     X, Y = data(output='vi_all')
+    sbase = 100 # MW
+    
+    # Import system data
+    cfi_vi  = torch.from_numpy(np.genfromtxt("System_data\cfi_vi_matrix.csv", dtype=np.float32, delimiter=',')).to(device)
+    cfi_vr  = torch.from_numpy(np.genfromtxt("System_data\cfi_vr_matrix.csv", dtype=np.float32, delimiter=',')).to(device)
+    cfr_vi  = torch.from_numpy(np.genfromtxt("System_data\cfr_vi_matrix.csv", dtype=np.float32, delimiter=',')).to(device)
+    cfr_vr  = torch.from_numpy(np.genfromtxt("System_data\cfr_vr_matrix.csv", dtype=np.float32, delimiter=',')).to(device)
+
+    cti_vi  = torch.from_numpy(np.genfromtxt("System_data\cti_vi_matrix.csv", dtype=np.float32, delimiter=',')).to(device)
+    cti_vr  = torch.from_numpy(np.genfromtxt("System_data\cti_vr_matrix.csv", dtype=np.float32, delimiter=',')).to(device)
+    ctr_vi  = torch.from_numpy(np.genfromtxt("System_data\ctr_vi_matrix.csv", dtype=np.float32, delimiter=',')).to(device)
+    ctr_vr  = torch.from_numpy(np.genfromtxt("System_data\ctr_vr_matrix.csv", dtype=np.float32, delimiter=',')).to(device)
+
+    pf_v  = torch.from_numpy(np.genfromtxt("System_data\pf_v_matrix.csv", dtype=np.float32, delimiter=',')).to(device)
+    pt_v  = torch.from_numpy(np.genfromtxt("System_data\pt_v_matrix.csv", dtype=np.float32, delimiter=',')).to(device)
+
+    pf_pinj  = torch.from_numpy(np.genfromtxt("System_data\power_flow_to_injections.csv", dtype=np.float32, delimiter=',')).to(device)
+
     X_training, X_val, X_test, y_training, y_val, y_test = split_normalise(X, Y, Pinj, Qinj)
 
     x_training = torch.from_numpy( np.nan_to_num(X_training).astype(np.float32) )
@@ -278,12 +330,12 @@ if __name__ == '__main__':
             # loss_ = loss(out,y)
             # print("LOSS SHAPE= ", loss_.shape)
 
-            sqdiff, vloss, ploss= extended_loss(y,out)
-            ext_loss= torch.mean(sqdiff + torch.concat([vloss,ploss],dim=1) )
+            sqdiff, ploss= extended_loss(y,out, cfi_vi, cfi_vr, cfr_vi, cfr_vr, cti_vi, cti_vr, ctr_vi, ctr_vr, pf_v, pt_v, pf_pinj, sbase)
+            ext_loss= torch.mean(sqdiff) + torch.mean(ploss) 
 
             if LOG_TB:
                 writer.add_scalar("Train/SqDiff", torch.mean(sqdiff),epoch)
-                writer.add_scalar("Train/PF_Volt", torch.mean(vloss),epoch)
+                # writer.add_scalar("Train/PF_Volt", torch.mean(vloss),epoch)
                 writer.add_scalar("Train/PF_Power", torch.mean(ploss),epoch)
 
             # print(f"SqDiff= {torch.mean(sqdiff)}\t VLoss= {torch.mean(vloss)}\t PLoss= {torch.mean(ploss)}")
@@ -295,13 +347,13 @@ if __name__ == '__main__':
         with torch.no_grad():            
             out= net(x_val)
             
-            val_sqdiff, val_vloss, val_ploss = extended_loss(y_val,out)
+            val_sqdiff, val_ploss = extended_loss(y_val,out, cfi_vi, cfi_vr, cfr_vi, cfr_vr, cti_vi, cti_vr, ctr_vi, ctr_vr, pf_v, pt_v, pf_pinj, sbase)
 
-            vloss= torch.mean(val_sqdiff + torch.concat([val_vloss,val_ploss],dim=1) )
+            vloss= torch.mean(val_sqdiff) + torch.mean(val_ploss )
 
             if LOG_TB:
                 writer.add_scalar("Val/SqDiff", torch.mean(val_sqdiff), epoch)
-                writer.add_scalar("Val/PF_Volt", torch.mean(val_vloss),epoch)
+                # writer.add_scalar("Val/PF_Volt", torch.mean(val_vloss),epoch)
                 writer.add_scalar("Val/PF_Power", torch.mean(val_ploss),epoch)                
                 writer.flush()
 
@@ -312,7 +364,7 @@ if __name__ == '__main__':
             
             if LOG_MODEL:                    
                 out_file.write((f"{epoch}: \t {vloss}\n")) 
-            print((f"EPOCH {epoch}:\tSQDiff= {torch.mean(val_sqdiff)}\tVLoss= {torch.mean(val_vloss)}\tPLoss= {torch.mean(val_ploss)}" ))
+            print((f"EPOCH {epoch}:\tSQDiff= {torch.mean(val_sqdiff)}\tVLoss= {torch.mean(val_sqdiff)}\tPLoss= {torch.mean(val_ploss)}" ))
     
     
     test_out= net(x_test)
