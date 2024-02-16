@@ -4,7 +4,7 @@ import torch
 
 
 def extened_loss_v_pinj():
-    
+    return
 
 
 def current_from_voltage(vr_hat, vi_hat, bdata):
