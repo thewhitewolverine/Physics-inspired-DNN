@@ -1,6 +1,12 @@
 import numpy as np
 import torch 
 
+
+
+def extened_loss_v_pinj():
+    
+
+
 def current_from_voltage(vr_hat, vi_hat, bdata):
     cfr_vr_matrix  = np.zeros((vr_hat.shape[0], bdata.shape[0]))
     cfr_vi_matrix  = np.zeros((vr_hat.shape[0], bdata.shape[0]))
@@ -60,6 +66,17 @@ def current_from_voltage(vr_hat, vi_hat, bdata):
     cfi_hat = np.matmul(vr_hat, cfi_vr_matrix) + np.matmul(vi_hat, cfi_vi_matrix)
     ctr_hat = np.matmul(vr_hat, ctr_vr_matrix) + np.matmul(vi_hat, ctr_vi_matrix)
     cti_hat = np.matmul(vr_hat, cti_vr_matrix) + np.matmul(vi_hat, cti_vi_matrix)
+
+    np.savetxt("System_data\cfr_vr_matrix.csv", cfr_vr_matrix, delimiter= ',')
+    np.savetxt("System_data\cfi_vr_matrix.csv", cfi_vr_matrix, delimiter= ',')
+    np.savetxt("System_data\ctr_vr_matrix.csv", ctr_vr_matrix, delimiter= ',')
+    np.savetxt("System_data\cti_vr_matrix.csv", cti_vr_matrix, delimiter= ',')
+
+    np.savetxt("System_data\cfr_vi_matrix.csv", cfr_vi_matrix, delimiter= ',')
+    np.savetxt("System_data\cfi_vi_matrix.csv", cfi_vi_matrix, delimiter= ',')
+    np.savetxt("System_data\ctr_vi_matrix.csv", ctr_vi_matrix, delimiter= ',')
+    np.savetxt("System_data\cti_vi_matrix.csv", cti_vi_matrix, delimiter= ',')
+
 
     return cfr_hat, cfi_hat, ctr_hat, cti_hat 
     
